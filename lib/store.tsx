@@ -76,7 +76,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const [loaded, setLoaded] = useState(false);
   const [aSincronizar, setASincronizar] = useState(false);
   const [erroSync, setErroSync] = useState<string | null>(null);
-  const supabaseAtivo = isSupabaseConfigured;
+  const [supabaseAtivo, setSupabaseAtivo] = useState(() => isSupabaseConfigured());
 
   const falhar = (msg: string) => {
     setErroSync(msg);
@@ -84,11 +84,24 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   };
 
   // ---- carga inicial: tudo vem do Supabase ----
+  // Reage a mudanças de config runtime (guardar no telemóvel via gate)
+  useEffect(() => {
+    const recalc = () => setSupabaseAtivo(isSupabaseConfigured());
+    recalc();
+    window.addEventListener('elo:supabase-changed', recalc);
+    window.addEventListener('storage', recalc);
+    return () => {
+      window.removeEventListener('elo:supabase-changed', recalc);
+      window.removeEventListener('storage', recalc);
+    };
+  }, []);
+
   useEffect(() => {
     if (!supabaseAtivo) {
       setLoaded(true);
       return;
     }
+    setLoaded(false);
     let cancelado = false;
     const carregar = async () => {
       setASincronizar(true);
@@ -173,8 +186,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     };
     carregar();
     return () => { cancelado = true; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [supabaseAtivo]);
 
   // ---- escritas: otimistas, Supabase é a única fonte ----
   const setMembros: Store['setMembros'] = (fn) => {
