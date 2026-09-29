@@ -1,15 +1,12 @@
 'use client';
 
-import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { createContext, useContext, useEffect, useMemo, useState } from 'react';
+import type { SupabaseClient } from '@supabase/supabase-js';
 import type { Config, Envio, Membro, Template } from '@/lib/types';
 import { SEED_TEMPLATES, TEMPLATE_MIGRATIONS, HORARIO_CULTOS_PADRAO, HORARIO_CULTOS_ANTIGO } from '@/lib/seed-templates';
 import { uid } from '@/lib/utils';
 import { getSupabase, isSupabaseConfigured } from '@/lib/supabase';
-
-const K_MEMBROS = 'acompanhamais:membros:v1';
-const K_TEMPLATES = 'acompanhamais:templates:v1';
-const K_ENVIOS = 'acompanhamais:envios:v1';
-const K_CONFIG = 'acompanhamais:config:v1';
+import { toast } from '@/components/ui/toaster';
 
 interface Store {
   membros: Membro[];
@@ -32,20 +29,44 @@ interface Store {
 
 const Ctx = createContext<Store | null>(null);
 
-function ler<T>(k: string, fb: T): T {
-  try {
-    const raw = localStorage.getItem(k);
-    if (raw) return JSON.parse(raw) as T;
-  } catch {}
-  return fb;
-}
-
 const DEFAULT_CONFIG: Config = {
   nome_igreja: 'Igreja Evangélica',
   lider_principal: '',
   horario_cultos: HORARIO_CULTOS_PADRAO,
   endereco: '',
 };
+
+const paraSBTemplate = (t: Template) => ({
+  id: t.id, titulo: t.titulo, categoria: t.categoria, conteudo: t.conteudo,
+  versiculo_ref: t.versiculo_ref ?? null, is_padrao: t.isPadrao ?? false,
+});
+const deSBTemplate = (r: Record<string, unknown>): Template => ({
+  id: String(r.id), titulo: String(r.titulo ?? ''), categoria: String(r.categoria ?? ''),
+  conteudo: String(r.conteudo ?? ''),
+  versiculo_ref: (r.versiculo_ref as string) ?? undefined,
+  isPadrao: Boolean(r.is_padrao),
+});
+
+/** Sincroniza só o que mudou (upsert) + o que foi removido (delete) */
+async function syncTabela<T extends { id: string }>(
+  sb: SupabaseClient,
+  tabela: string,
+  antes: T[],
+  depois: T[],
+  mapear: (x: T) => unknown = (x) => x
+) {
+  const snap = new Map(antes.map((x) => [x.id, JSON.stringify(x)]));
+  const mudados = depois.filter((x) => snap.get(x.id) !== JSON.stringify(x));
+  for (let i = 0; i < mudados.length; i += 200) {
+    const { error } = await sb.from(tabela).upsert(mudados.slice(i, i + 200).map(mapear) as never[], { onConflict: 'id' });
+    if (error) throw error;
+  }
+  const idsDepois = new Set(depois.map((x) => x.id));
+  for (const r of antes.filter((x) => !idsDepois.has(x.id))) {
+    const { error } = await sb.from(tabela).delete().eq('id', r.id);
+    if (error) throw error;
+  }
+}
 
 export function StoreProvider({ children }: { children: React.ReactNode }) {
   const [membros, setMembrosState] = useState<Membro[]>([]);
@@ -56,158 +77,64 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const [aSincronizar, setASincronizar] = useState(false);
   const [erroSync, setErroSync] = useState<string | null>(null);
   const supabaseAtivo = isSupabaseConfigured;
-  const aCarregarNuvem = useRef(false);
 
-  // ---- helpers Supabase (fire-and-forget, nunca bloqueiam a UI) ----
-  const sbUpsert = async (tabela: 'membros' | 'templates' | 'envios', linhas: unknown[]) => {
-    if (!supabaseAtivo || linhas.length === 0 || aCarregarNuvem.current) return;
-    try {
-      setASincronizar(true);
-      const sb = getSupabase();
-      if (!sb) return;
-      // upsert em lotes de 200
-      for (let i = 0; i < linhas.length; i += 200) {
-        const lote = linhas.slice(i, i + 200);
-        const { error } = await sb.from(tabela).upsert(lote as never[], { onConflict: 'id' });
-        if (error) throw error;
-      }
-      setErroSync(null);
-    } catch (e: unknown) {
-      setErroSync(e instanceof Error ? e.message : 'Falha ao sincronizar com Supabase');
-    } finally {
-      setASincronizar(false);
-    }
+  const falhar = (msg: string) => {
+    setErroSync(msg);
+    toast(msg + ' ⚠️');
   };
 
-  const sbApagar = async (tabela: 'membros' | 'templates' | 'envios', id: string) => {
-    if (!supabaseAtivo) return;
-    try {
-      const sb = getSupabase();
-      if (!sb) return;
-      await sb.from(tabela).delete().eq('id', id);
-    } catch (e: unknown) {
-      setErroSync(e instanceof Error ? e.message : 'Falha ao apagar no Supabase');
-    }
-  };
-
-  const sbGuardarConfig = async (c: Config) => {
-    if (!supabaseAtivo || aCarregarNuvem.current) return;
-    try {
-      setASincronizar(true);
-      const sb = getSupabase();
-      if (!sb) return;
-      const { error } = await sb.from('app_config').upsert(
-        { id: 'geral', nome_igreja: c.nome_igreja, lider_principal: c.lider_principal, horario_cultos: c.horario_cultos, endereco: c.endereco ?? '', atualizado_em: new Date().toISOString() } as never,
-        { onConflict: 'id' }
-      );
-      if (error) throw error;
-      setErroSync(null);
-    } catch (e: unknown) {
-      setErroSync(e instanceof Error ? e.message : 'Falha ao guardar config no Supabase');
-    } finally {
-      setASincronizar(false);
-    }
-  };
-
-  const paraSBTemplate = (t: Template) => ({
-    id: t.id, titulo: t.titulo, categoria: t.categoria, conteudo: t.conteudo,
-    versiculo_ref: t.versiculo_ref ?? null, is_padrao: t.isPadrao ?? false,
-  });
-  const deSBTemplate = (r: Record<string, unknown>): Template => ({
-    id: String(r.id), titulo: String(r.titulo ?? ''), categoria: String(r.categoria ?? ''),
-    conteudo: String(r.conteudo ?? ''),
-    versiculo_ref: (r.versiculo_ref as string) ?? undefined,
-    isPadrao: Boolean(r.is_padrao),
-  });
-
-  /** Migração 1x para o novo horário (só toca em textos padrão não editados) */
-  const migrarTemplates = (lista: Template[]): { lista: Template[]; mudou: boolean } => {
-    let mudou = false;
-    const nova = lista.map((tpl) => {
-      const mig = TEMPLATE_MIGRATIONS.find((m) => m.de === tpl.conteudo);
-      if (mig) { mudou = true; return { ...tpl, conteudo: mig.para }; }
-      return tpl;
-    });
-    return { lista: nova, mudou };
-  };
-
-  const migrarHorario = (c: Config): { config: Config; mudou: boolean } => {
-    if (!c.horario_cultos || c.horario_cultos === HORARIO_CULTOS_ANTIGO) {
-      return { config: { ...c, horario_cultos: HORARIO_CULTOS_PADRAO }, mudou: true };
-    }
-    return { config: c, mudou: false };
-  };
-
-  const persist = (k: string, v: unknown) => {
-    try {
-      localStorage.setItem(k, JSON.stringify(v));
-    } catch {}
-  };
-
+  // ---- carga inicial: tudo vem do Supabase ----
   useEffect(() => {
-    let cancelado = false;
-    const iniciar = async () => {
-      // 1) cache local primeiro (rápido + offline)
-      let t = ler<Template[]>(K_TEMPLATES, []);
-      if (!t || t.length === 0) {
-        t = SEED_TEMPLATES.map((s) => ({ ...s, id: uid('tpl'), isPadrao: true }));
-      }
-      const migLocal = migrarTemplates(t);
-      t = migLocal.lista;
-      persist(K_TEMPLATES, t);
-      const mLocal = ler<Membro[]>(K_MEMBROS, []);
-      const eLocal = ler<Envio[]>(K_ENVIOS, []);
-      let cLocal = ler<Config>(K_CONFIG, DEFAULT_CONFIG);
-      const migHor = migrarHorario(cLocal);
-      cLocal = migHor.config;
-      if (migLocal.mudou || migHor.mudou) persist(K_CONFIG, cLocal);
-      if (cancelado) return;
-      setTemplatesState(t);
-      setMembrosState(mLocal);
-      setEnviosState(eLocal);
-      setConfigState(cLocal);
+    if (!supabaseAtivo) {
       setLoaded(true);
-
-      // 2) se Supabase configurado, puxar nuvem e reconciliar
-      if (!supabaseAtivo) return;
-      const sb = getSupabase();
-      if (!sb) return;
+      return;
+    }
+    let cancelado = false;
+    const carregar = async () => {
+      setASincronizar(true);
       try {
-        aCarregarNuvem.current = true;
-        setASincronizar(true);
+        const sb = getSupabase();
+        if (!sb) throw new Error('Supabase não configurado');
         const [rM, rT, rE, rC] = await Promise.all([
-          sb.from('membros').select('*').limit(5000),
+          sb.from('membros').select('*').order('criado_em', { ascending: false }).limit(5000),
           sb.from('templates').select('*').limit(2000),
           sb.from('envios').select('*').order('enviado_em', { ascending: false }).limit(5000),
           sb.from('app_config').select('*').eq('id', 'geral').maybeSingle(),
         ]);
         if (cancelado) return;
-        if (!rM.error && rM.data && rM.data.length > 0) {
-          setMembrosState(rM.data as unknown as Membro[]);
-          persist(K_MEMBROS, rM.data);
-        } else if (!rM.error && (rM.data?.length ?? 0) === 0 && mLocal.length > 0) {
-          // primeira vez: subir cache local
-          await sb.from('membros').upsert(mLocal as never[], { onConflict: 'id' });
-        }
-        if (!rT.error && rT.data && rT.data.length > 0) {
-          let conv = (rT.data as unknown as Record<string, unknown>[]).map(deSBTemplate);
-          const mig = migrarTemplates(conv);
-          conv = mig.lista;
-          setTemplatesState(conv);
-          persist(K_TEMPLATES, conv);
-          if (mig.mudou) {
-            try { await sb.from('templates').upsert(conv.map(paraSBTemplate) as never[], { onConflict: 'id' }); } catch {}
+        if (rM.error) throw new Error('Membros: ' + rM.error.message);
+        if (rT.error) throw new Error('Modelos: ' + rT.error.message);
+        if (rE.error) throw new Error('Envios: ' + rE.error.message);
+        if (rC.error) throw new Error('Config: ' + rC.error.message);
+
+        setMembrosState((rM.data as unknown as Membro[]) ?? []);
+
+        // Modelos: usa a nuvem; se vazia, semeia; migra textos do horário antigo
+        let tpl: Template[];
+        if (rT.data && rT.data.length > 0) {
+          tpl = (rT.data as unknown as Record<string, unknown>[]).map(deSBTemplate);
+          let mudou = false;
+          tpl = tpl.map((t) => {
+            const mig = TEMPLATE_MIGRATIONS.find((m) => m.de === t.conteudo);
+            if (mig) { mudou = true; return { ...t, conteudo: mig.para }; }
+            return t;
+          });
+          if (mudou) {
+            const { error } = await sb.from('templates').upsert(tpl.map(paraSBTemplate) as never[], { onConflict: 'id' });
+            if (error) throw new Error('Modelos: ' + error.message);
           }
-        } else if (!rT.error && (rT.data?.length ?? 0) === 0) {
-          await sb.from('templates').upsert(t.map(paraSBTemplate) as never[], { onConflict: 'id' });
+        } else {
+          tpl = SEED_TEMPLATES.map((s) => ({ ...s, id: uid('tpl'), isPadrao: true }));
+          const { error } = await sb.from('templates').upsert(tpl.map(paraSBTemplate) as never[], { onConflict: 'id' });
+          if (error) throw new Error('Modelos: ' + error.message);
         }
-        if (!rE.error && rE.data) {
-          setEnviosState(rE.data as unknown as Envio[]);
-          persist(K_ENVIOS, rE.data);
-        } else if (eLocal.length > 0) {
-          await sb.from('envios').upsert(eLocal as never[], { onConflict: 'id' });
-        }
-        if (!rC.error && rC.data) {
+        if (cancelado) return;
+        setTemplatesState(tpl);
+
+        setEnviosState((rE.data as unknown as Envio[]) ?? []);
+
+        // Config da igreja
+        if (rC.data) {
           const d = rC.data as unknown as Record<string, string>;
           let cc: Config = {
             nome_igreja: d.nome_igreja ?? DEFAULT_CONFIG.nome_igreja,
@@ -215,56 +142,105 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
             horario_cultos: d.horario_cultos ?? '',
             endereco: d.endereco ?? '',
           };
-          const migC = migrarHorario(cc);
-          cc = migC.config;
-          setConfigState(cc);
-          persist(K_CONFIG, cc);
-          if (migC.mudou) {
-            try {
-              await sb.from('app_config').upsert(
-                { id: 'geral', nome_igreja: cc.nome_igreja, lider_principal: cc.lider_principal, horario_cultos: cc.horario_cultos, endereco: cc.endereco ?? '', atualizado_em: new Date().toISOString() } as never,
-                { onConflict: 'id' }
-              );
-            } catch {}
+          if (!cc.horario_cultos || cc.horario_cultos === HORARIO_CULTOS_ANTIGO) {
+            cc = { ...cc, horario_cultos: HORARIO_CULTOS_PADRAO };
+            const { error } = await sb.from('app_config').upsert(
+              { id: 'geral', nome_igreja: cc.nome_igreja, lider_principal: cc.lider_principal, horario_cultos: cc.horario_cultos, endereco: cc.endereco ?? '', atualizado_em: new Date().toISOString() } as never,
+              { onConflict: 'id' }
+            );
+            if (error) throw new Error('Config: ' + error.message);
           }
-        } else if (cLocal) {
-          await sbGuardarConfig(cLocal);
+          if (cancelado) return;
+          setConfigState(cc);
+        } else {
+          const { error } = await sb.from('app_config').upsert(
+            { id: 'geral', nome_igreja: DEFAULT_CONFIG.nome_igreja, lider_principal: DEFAULT_CONFIG.lider_principal, horario_cultos: DEFAULT_CONFIG.horario_cultos, endereco: '', atualizado_em: new Date().toISOString() } as never,
+            { onConflict: 'id' }
+          );
+          if (error) throw new Error('Config: ' + error.message);
+          if (cancelado) return;
+          setConfigState(DEFAULT_CONFIG);
         }
         setErroSync(null);
       } catch (e: unknown) {
-        if (!cancelado) setErroSync(e instanceof Error ? e.message : 'Falha ao ligar ao Supabase');
+        if (!cancelado) falhar(e instanceof Error ? e.message : 'Falha ao ligar ao Supabase');
       } finally {
-        aCarregarNuvem.current = false;
-        if (!cancelado) setASincronizar(false);
+        if (!cancelado) {
+          setASincronizar(false);
+          setLoaded(true);
+        }
       }
     };
-    iniciar();
+    carregar();
     return () => { cancelado = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // ---- escritas: otimistas, Supabase é a única fonte ----
   const setMembros: Store['setMembros'] = (fn) => {
+    const sb = getSupabase();
+    if (!sb) { falhar('Supabase não configurado'); return; }
     const proximo = fn(membros);
+    const anterior = membros;
     setMembrosState(proximo);
-    persist(K_MEMBROS, proximo);
-    void sbUpsert('membros', proximo);
+    void (async () => {
+      try {
+        setASincronizar(true);
+        await syncTabela(sb, 'membros', anterior, proximo);
+        setErroSync(null);
+      } catch { falhar('Falha ao guardar membro no Supabase'); }
+      finally { setASincronizar(false); }
+    })();
   };
+
   const setTemplates: Store['setTemplates'] = (fn) => {
+    const sb = getSupabase();
+    if (!sb) { falhar('Supabase não configurado'); return; }
     const proximo = fn(templates);
+    const anterior = templates;
     setTemplatesState(proximo);
-    persist(K_TEMPLATES, proximo);
-    void sbUpsert('templates', proximo.map(paraSBTemplate));
+    void (async () => {
+      try {
+        setASincronizar(true);
+        await syncTabela(sb, 'templates', anterior, proximo, paraSBTemplate);
+        setErroSync(null);
+      } catch { falhar('Falha ao guardar modelo no Supabase'); }
+      finally { setASincronizar(false); }
+    })();
   };
+
   const setEnvios: Store['setEnvios'] = (fn) => {
+    const sb = getSupabase();
+    if (!sb) { falhar('Supabase não configurado'); return; }
     const proximo = fn(envios);
+    const anterior = envios;
     setEnviosState(proximo);
-    persist(K_ENVIOS, proximo);
-    void sbUpsert('envios', proximo);
+    void (async () => {
+      try {
+        setASincronizar(true);
+        await syncTabela(sb, 'envios', anterior, proximo);
+        setErroSync(null);
+      } catch { falhar('Falha ao guardar envio no Supabase'); }
+      finally { setASincronizar(false); }
+    })();
   };
+
   const setConfig = (c: Config) => {
+    const sb = getSupabase();
+    if (!sb) { falhar('Supabase não configurado'); return; }
     setConfigState(c);
-    persist(K_CONFIG, c);
-    void sbGuardarConfig(c);
+    void (async () => {
+      try {
+        setASincronizar(true);
+        const { error } = await sb.from('app_config').upsert(
+          { id: 'geral', nome_igreja: c.nome_igreja, lider_principal: c.lider_principal, horario_cultos: c.horario_cultos, endereco: c.endereco ?? '', atualizado_em: new Date().toISOString() } as never,
+          { onConflict: 'id' }
+        );
+        if (error) throw error;
+        setErroSync(null);
+      } catch { falhar('Falha ao guardar dados da igreja'); }
+      finally { setASincronizar(false); }
+    })();
   };
 
   const adicionarMembro: Store['adicionarMembro'] = (m) => {
@@ -276,7 +252,6 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     setMembros((p) => p.map((m) => (m.id === id ? { ...m, ...patch } : m)));
   const removerMembro = (id: string) => {
     setMembros((p) => p.filter((m) => m.id !== id));
-    void sbApagar('membros', id);
   };
 
   const registarEnvio = (membroId: string, conteudo: string, templateId?: string) => {

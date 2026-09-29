@@ -4,7 +4,7 @@ import Papa from 'papaparse';
 import { useStore } from '@/lib/store';
 import { Button, Card, Input, Label, Textarea } from '@/components/ui/primitives';
 import { toast } from '@/components/ui/toaster';
-import { Upload, Download, Trash2, Church, FileSpreadsheet, Database, Cloud, CloudOff } from 'lucide-react';
+import { Upload, Download, Trash2, Church, FileSpreadsheet, Database, Cloud } from 'lucide-react';
 import { uid } from '@/lib/utils';
 import type { Membro } from '@/lib/types';
 import { exportarMembrosExcel, exportarRelatorioExcel, descarregarModeloExcel, lerMembrosDeExcel, type LinhaMembroExcel } from '@/lib/excel';
@@ -12,7 +12,7 @@ import { exportarMembrosExcel, exportarRelatorioExcel, descarregarModeloExcel, l
 interface LinhaCSV { nome?: string; telefone?: string; aniversario?: string; tags?: string; status?: string; responsavel?: string; notas?: string; proximo_contato?: string; [k: string]: string | undefined }
 
 export default function Config() {
-  const { membros, templates, envios, config, setConfig, setMembros, setTemplates, setEnvios, loaded, supabaseAtivo, aSincronizar, erroSync } = useStore();
+  const { membros, templates, envios, config, setConfig, setMembros, setTemplates, setEnvios, loaded, aSincronizar, erroSync } = useStore();
   const [form, setForm] = useState(config);
   const [prev, setPrev] = useState<Array<LinhaCSV | LinhaMembroExcel>>([]);
   const [ficheiro, setFicheiro] = useState<File | null>(null);
@@ -147,27 +147,12 @@ export default function Config() {
       <div><h1 className="text-[22px] font-bold tracking-tight">Ajustes</h1><p className="text-[13px] text-slate-500">Supabase, Excel, importação e backups</p></div>
 
       <Card>
-        <h2 className="mb-2 flex items-center gap-2 font-bold"><Database size={18} /> ☁️ Supabase — armazenamento na nuvem</h2>
-        {supabaseAtivo ? (
-          <div className="space-y-1 text-sm">
-            <p className="flex items-center gap-2 text-green-700"><Cloud size={16} /> Ligado à nuvem ✅ {aSincronizar ? '(a sincronizar…)' : '(sincronizado)'}</p>
-            <p className="text-slate-600">{membros.length} membros · {envios.length} envios · {templates.length} modelos na nuvem/local.</p>
-            {erroSync && <p className="text-xs text-red-600">Erro sync: {erroSync}</p>}
-            <p className="text-xs text-slate-500">Os dados são guardados no Supabase automaticamente e ficam em cache local para offline.</p>
-          </div>
-        ) : (
-          <div className="space-y-1 text-sm">
-            <p className="flex items-center gap-2 text-amber-700"><CloudOff size={16} /> Modo local (sem Supabase)</p>
-            <p className="text-slate-600">Para ativar a nuvem:</p>
-            <ol className="list-decimal pl-5 text-slate-600">
-              <li>Cria projeto em supabase.com → copia URL + anon key.</li>
-              <li>No SQL Editor, executa o ficheiro <code>supabase-schema.sql</code> do projeto.</li>
-              <li>Cria <code>.env.local</code> a partir de <code>.env.example</code> e reinicia.</li>
-              <li>Na Vercel: Project → Settings → Environment Variables → adiciona as 2 vars.</li>
-            </ol>
-            {erroSync && <p className="text-xs text-red-600">Erro: {erroSync}</p>}
-          </div>
-        )}
+        <h2 className="mb-2 flex items-center gap-2 font-bold"><Database size={18} /> Supabase — nuvem</h2>
+        <div className="space-y-1 text-sm">
+          <p className="flex items-center gap-2 text-green-700"><Cloud size={16} /> Ligado à nuvem ✅ {aSincronizar ? '(a sincronizar…)' : '(sincronizado)'}</p>
+          <p className="text-slate-600">{membros.length} membros · {envios.length} envios · {templates.length} modelos — tudo guardado no Supabase.</p>
+          {erroSync && <p className="text-xs text-red-600">Erro: {erroSync}</p>}
+        </div>
       </Card>
 
       <Card>
@@ -257,21 +242,22 @@ export default function Config() {
         <Button
           variant="danger" className="mt-2 w-full"
           onClick={() => {
-            if (confirm('Apagar TODOS os dados? Esta ação não pode ser anulada.')) {
-              if (confirm('Confirmação final: apagar mesmo tudo?')) {
-                localStorage.clear();
-                location.reload();
+            if (confirm('Apagar TODOS os membros e envios do Supabase? Esta ação não pode ser anulada.')) {
+              if (confirm('Confirmação final: apagar mesmo tudo da nuvem?')) {
+                setMembros(() => []);
+                setEnvios(() => []);
+                toast('Todos os dados apagados da nuvem. 🗑️');
               }
             }
           }}
         >
-          <Trash2 size={16} /> Limpar todos os dados
+          <Trash2 size={16} /> Limpar todos os dados (nuvem)
         </Button>
       </Card>
 
       <Card>
         <h2 className="mb-1 font-bold">📱 Sobre a app</h2>
-        <p className="text-sm text-slate-600">Acompanha+ v1.1.0 — follow-up de membros via SMS manual. {supabaseAtivo ? 'Dados guardados no Supabase (nuvem) com cache local.' : 'Dados apenas neste dispositivo (LocalStorage). Ativa o Supabase para nuvem.'}</p>
+        <p className="text-sm text-slate-600">Acompanha+ v1.2.0 — follow-up de membros via SMS manual. Todos os dados vivem no Supabase (nuvem).</p>
         <p className="mt-2 text-sm text-slate-600"><b>Instalar como PWA:</b> no Android (Chrome → ⋮ → «Adicionar ao ecrã principal»); no iPhone (Safari → Partilhar → «Adicionar ao Ecrã Principal»). Depois funciona offline.</p>
         <p className="mt-2 text-xs text-slate-500">Aviso de privacidade: os contactos são dados pessoais. Usa apenas para fins pastorais e com consentimento. Não partilhes o dispositivo sem proteção.</p>
       </Card>

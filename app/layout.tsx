@@ -3,6 +3,7 @@ import './globals.css';
 import { Nav } from '@/components/nav';
 import { Toaster } from '@/components/ui/toaster';
 import { SmsModalProvider } from '@/components/sms-modal-provider';
+import { SupabaseGate } from '@/components/supabase-gate';
 
 export const metadata: Metadata = {
   title: 'Acompanha+ — Follow-up da Igreja',
@@ -35,7 +36,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           <div className="mx-auto flex min-h-screen w-full max-w-6xl">
             <Nav />
             <main className="mx-auto w-full max-w-xl flex-1 px-4 pb-[calc(7.5rem+env(safe-area-inset-bottom,0px))] pt-[calc(1.1rem+env(safe-area-inset-top,0px))] md:mx-0 md:max-w-none md:px-8 md:pb-10 md:pl-64 md:pt-6">
-              {children}
+              <SupabaseGate>{children}</SupabaseGate>
             </main>
           </div>
           <Toaster />
