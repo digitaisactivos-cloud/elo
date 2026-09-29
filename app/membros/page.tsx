@@ -14,13 +14,15 @@ const EMPTY: Omit<Membro, 'id' | 'criado_em'> = {
 
 export default function Membros() {
   const { membros, envios, adicionarMembro, atualizarMembro, removerMembro, loaded } = useStore();
-  const { abrir } = useSms();
+  const { abrir, abrirLote } = useSms();
   const [pesquisa, setPesquisa] = useState('');
   const [fTag, setFTag] = useState('');
   const [fStatus, setFStatus] = useState('');
   const [modal, setModal] = useState<null | { editId?: string }>(null);
   const [form, setForm] = useState(EMPTY);
   const [histId, setHistId] = useState<string | null>(null);
+  const [aSelecionar, setASelecionar] = useState(false);
+  const [selecionados, setSelecionados] = useState<Set<string>>(new Set());
 
   const filtrados = useMemo(() => {
     const q = pesquisa.trim().toLowerCase();
@@ -48,6 +50,20 @@ export default function Membros() {
   const toggleTag = (t: string) =>
     setForm((f) => ({ ...f, tags: f.tags.includes(t) ? f.tags.filter((x) => x !== t) : [...f.tags, t] }));
 
+  const toggleSelecao = (id: string) =>
+    setSelecionados((p) => {
+      const n = new Set(p);
+      if (n.has(id)) n.delete(id);
+      else n.add(id);
+      return n;
+    });
+
+  const iniciarLote = () => {
+    const lista = membros.filter((m) => selecionados.has(m.id));
+    if (!lista.length) { toast('Seleciona pelo menos 1 membro. ⚠️'); return; }
+    abrirLote(lista);
+  };
+
   if (!loaded) {
     return (
       <div className="space-y-2">
@@ -63,9 +79,17 @@ export default function Membros() {
 
   return (
     <div className="space-y-3">
-      <div>
-        <h1 className="text-[22px] font-bold tracking-tight">Membros</h1>
-        <p className="text-[13px] text-slate-500">{filtrados.length} de {membros.length} · toca num membro para agir</p>
+      <div className="flex items-start justify-between gap-2">
+        <div>
+          <h1 className="text-[22px] font-bold tracking-tight">Membros</h1>
+          <p className="text-[13px] text-slate-500">{filtrados.length} de {membros.length} · toca num membro para agir</p>
+        </div>
+        <button
+          onClick={() => { setASelecionar(!aSelecionar); setSelecionados(new Set()); }}
+          className={`touch-manip shrink-0 rounded-full px-4 py-2.5 text-xs font-bold transition active:scale-95 ${aSelecionar ? 'bg-ink text-white' : 'bg-white text-brand-700 shadow-card'}`}
+        >
+          {aSelecionar ? 'Cancelar' : '☑️ Selecionar'}
+        </button>
       </div>
 
       <div className="sticky top-[calc(.25rem+env(safe-area-inset-top,0px))] z-20 -mx-4 bg-mist/90 px-4 py-2 backdrop-blur-xl md:static md:bg-transparent md:p-0">
@@ -92,8 +116,17 @@ export default function Membros() {
         <ul className="space-y-2">
           {filtrados.map((m) => (
             <li key={m.id}>
-              <Card className="!p-3">
+              <Card className={`!p-3 ${selecionados.has(m.id) ? '!border-brand-500 !ring-4 !ring-brand-100' : ''}`}>
                 <div className="flex items-center gap-3">
+                  {aSelecionar && (
+                    <button
+                      onClick={() => toggleSelecao(m.id)}
+                      aria-label="Selecionar"
+                      className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full border-2 text-sm font-bold transition ${selecionados.has(m.id) ? 'border-brand-600 bg-brand-600 text-white' : 'border-slate-300 bg-white text-transparent'}`}
+                    >
+                      ✓
+                    </button>
+                  )}
                   <Avatar nome={m.nome} />
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-[15px] font-bold">{m.nome}</p>
@@ -121,6 +154,22 @@ export default function Membros() {
       )}
 
       <Fab onClick={abrirNovo} aria-label="Novo membro"><Plus size={24} /></Fab>
+
+      {aSelecionar && (
+        <div className="fixed bottom-[calc(5.5rem+env(safe-area-inset-bottom,0px))] left-1/2 z-40 w-full max-w-xl -translate-x-1/2 px-4 md:bottom-6">
+          <div className="flex items-center gap-2 rounded-[1.75rem] border border-white/60 bg-white/95 p-2 shadow-card backdrop-blur-xl">
+            <button
+              onClick={() => setSelecionados(new Set(filtrados.map((m) => m.id)))}
+              className="touch-manip rounded-2xl bg-slate-100 px-3 py-2.5 text-xs font-bold text-slate-700"
+            >
+              Todos ({filtrados.length})
+            </button>
+            <Button onClick={iniciarLote} disabled={selecionados.size === 0} className="flex-1 !py-3 text-sm">
+              <Smartphone size={16} /> Enviar para {selecionados.size} 📤
+            </Button>
+          </div>
+        </div>
+      )}
 
       {modal && (
         <div className="fixed inset-0 z-50 flex items-end justify-center bg-ink/50 backdrop-blur-[2px] sm:items-center sm:p-4" onClick={() => setModal(null)}>
